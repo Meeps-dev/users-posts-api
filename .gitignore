@@ -1,0 +1,19 @@
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# MacOS system files
+.DS_Store
+
+# Database files (SQLite or temp)
+*.db
+
+# Environment variables
+.env
+
+# Alembic cache (optional)
+alembic/versions/*.pyc
+
+# Pytest cache
+.pytest_cache/
