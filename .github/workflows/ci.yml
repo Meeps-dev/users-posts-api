@@ -38,7 +38,8 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/users_posts_db
+      DATABASE_URL: postgresql://postgres:postgrespassword@127.0.0.1:5432/users_posts_db
+
 
     steps:
       - name: Checkout repository
