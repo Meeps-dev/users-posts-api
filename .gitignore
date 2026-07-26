@@ -1,7 +1,9 @@
 # Python virtual environment
 venv/
+.venv/
 __pycache__/
 *.pyc
+
 
 # MacOS system files
 .DS_Store
@@ -17,3 +19,11 @@ alembic/versions/*.pyc
 
 # Pytest cache
 .pytest_cache/
+
+.coverage
+htmlcov/
+dist/
+build/
+.terraform/
+*.tfstate
+*.tfstate.*
