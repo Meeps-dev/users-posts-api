@@ -112,7 +112,7 @@ Posts
 
 POST /posts/users/{user_id} – Create post for a specific user
 
-GET /posts/ – List all posts
+GET /posts/ – List all posts for a user
 
 🧠 Key Learnings
 
