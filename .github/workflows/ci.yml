@@ -12,8 +12,7 @@ on:
       - main
       - "feature/**"
 
-  workflow_dispatch:
-    - main
+  workflow_dispatch: main
 
 permissions:
   contents: read
