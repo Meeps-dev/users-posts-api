@@ -1,130 +1,140 @@
 # Users & Posts API
 
-A **FastAPI backend project** demonstrating user and post management with PostgreSQL, SQLAlchemy ORM, Alembic migrations, and automated testing.
-
-This project is part of a series of backend projects showcasing real-world API design and database relationships.
+A **FastAPI backend project** demonstrating user and post management with PostgreSQL, SQLAlchemy ORM, Alembic migrations, environment-based configuration, and automated testing.
 
 ---
 
 ## 🚀 Features
 
-- Create, read users
-- Create posts for users
-- Strong relational integrity: each post belongs to one user
+- Create and read users
+- Create posts linked to users
+- Relational integrity (one-to-many relationship)
 - Automatic database migrations with Alembic
-- Pydantic schemas for input validation and response shaping
-- Swagger UI documentation available at `/docs`
-- Automated tests using pytest and FastAPI TestClient
+- Centralized environment configuration via `python-dotenv` and `.env`
+- OpenAPI / Swagger UI documentation at `/docs`
+- Automated test suite using `pytest` and FastAPI `TestClient`
 
 ---
 
 ## 🛠️ Tech Stack
 
 - **Python 3.12**
-- **FastAPI** – Modern, high-performance web framework
+- **FastAPI** – Modern ASGI web framework
 - **PostgreSQL** – Relational database
-- **SQLAlchemy** – ORM to interact with PostgreSQL
+- **SQLAlchemy** – Database ORM
 - **Alembic** – Database migrations
 - **Pydantic** – Data validation
-- **pytest** – Automated testing
-- **Uvicorn** – ASGI server
+- **python-dotenv** – Environment variable management
+- **pytest** – Test runner
+- **Uvicorn** – ASGI web server
 
 ---
 
 ## 📁 Project Structure
 
+```text
 users-posts-api/
 │
 ├── app/
-│ ├── main.py
-│ ├── database.py
-│ ├── models/
-│ │ ├── user.py
-│ │ └── post.py
-│ ├── schemas/
-│ │ ├── user.py
-│ │ └── post.py
-│ └── routers/
-│ ├── users.py
-│ └── posts.py
+│   ├── main.py          # FastAPI application entry point
+│   ├── config.py        # Centralized settings & env configuration
+│   ├── database.py      # SQLAlchemy engine & session setup
+│   ├── models/          # ORM models (User, Post)
+│   ├── schemas/         # Pydantic schemas (User, Post)
+│   └── routers/         # API routes (users, posts)
 │
-├── alembic/
-├── tests/
-│ ├── test_users.py
-│ └── test_posts.py
-├── requirements.txt
+├── alembic/             # Migration environment & revision scripts
+├── tests/               # Pytest test suite
+├── .env                 # Local environment variables (git-ignored)
+├── .env.example         # Template for environment variables
+├── requirements.txt     # Python dependencies
 └── README.md
+```
 
 ---
 
 ## ⚡ Getting Started
 
-### 1. Clone the repo
+### 1. Clone the repository & navigate to directory
 
 ```bash
 git clone <your-repo-url>
 cd users-posts-api
+```
 
-2. Create a virtual environment
+### 2. Create and activate virtual environment
+
+```bash
 python3 -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
 
-3. Install dependencies
+### 3. Install dependencies
+
+```bash
 pip install -r requirements.txt
+```
 
-4. Setup PostgreSQL database
+### 4. Configure Environment Variables
+
+Copy `.env.example` to `.env`:
+
+```bash
+cp .env.example .env
+```
+
+Update `DATABASE_URL` in `.env` with your local PostgreSQL database credentials.
+
+### 5. Setup PostgreSQL Database
+
+Ensure PostgreSQL is running locally and create the database if not already created:
+
+```sql
 CREATE DATABASE users_posts_db;
+```
 
+### 6. Run Database Migrations
 
-Update app/database.py if your DB URL is different.
-
-5. Run migrations
+```bash
 alembic upgrade head
+```
 
-6. Start server
+### 7. Start the FastAPI Server
+
+```bash
 uvicorn app.main:app --reload
+```
 
+Open interactive Swagger docs in browser: `http://127.0.0.1:8000/docs`
 
-Open browser: http://127.0.0.1:8000/docs
+---
 
-docs
+## 🧪 Running Tests
 
-🧪 Running Tests
+Execute pytest:
+
+```bash
 pytest
-
+```
 
 Tests cover:
+- User creation and retrieval
+- Post creation for existing user
+- Handling of non-existent user post creation (404)
+- User post list retrieval
 
-User creation
+---
 
-Post creation
+## 🔗 API Endpoints
 
-Invalid post creation (non-existent user)
+### Users
+- `POST /users/` – Create a new user
+- `GET /users/` – List all users
 
-🔗 API Endpoints
-Users
+### Posts
+- `POST /posts/users/{user_id}` – Create a post for a user
+- `GET /posts/users/{user_id}` – List all posts for a user
 
-POST /users/ – Create user
-
-GET /users/ – List all users
-
-Posts
-
-POST /posts/users/{user_id} – Create post for a specific user
-
-GET /posts/ – List all posts for a user
-
-🧠 Key Learnings
-
-Proper relational modeling (one-to-many)
-
-Schema separation (Pydantic vs SQLAlchemy models)
-
-Database migrations with Alembic
-
-Automated testing for API endpoints
-
-Clean, modular project structure ready for GitHub and recruiters
-
-Meeps-dev.
-```
+### System
+- `GET /` – Root API status
+- `GET /health` – Health check endpoint
