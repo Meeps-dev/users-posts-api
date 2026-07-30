@@ -1,6 +1,6 @@
-name: Day 71 - First CI
+name: Day 72 - Quality Gates and Package
 
-run-name: "Day 71 CI | ${{ github.ref_name }} | ${{ github.sha }}"
+run-name: "CI | ${{ github.ref_name }} | ${{ github.sha }}"
 
 on:
   pull_request:
@@ -17,51 +17,258 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHON_VERSION: "3.12"
+
 jobs:
-  test:
+  lint:
+    name: Lint and formatting
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install lint dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff==0.16.0
+
+      - name: Run Ruff linting
+        run: ruff check .
+
+      - name: Check Ruff formatting
+        run: ruff format --check .
+
+  test:
+    name: Tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      DATABASE_URL: "postgresql://postgres:postgrespassword@127.0.0.1:5432/users_posts_test"
 
     services:
       postgres:
         image: postgres:15
+
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgrespassword
           POSTGRES_DB: users_posts_test
+
         ports:
           - 5432:5432
+
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres -d users_posts_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Create test report directory
+        run: mkdir -p reports
+
+      - name: Apply database migrations
+        run: alembic upgrade head
+
+      - name: Run tests with coverage
+        run: |
+          python -m pytest -q \
+            --cov=app \
+            --cov-report=term-missing \
+            --cov-report=xml:reports/coverage.xml \
+            --junitxml=reports/pytest.xml
+
+      - name: Save readable coverage report
+        if: always()
+        run: |
+          python -m coverage report --show-missing \
+            > reports/coverage.txt || true
+
+          cat reports/coverage.txt || true
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-${{ github.sha }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+  migration-check:
+    name: Alembic migration check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     env:
-      DATABASE_URL: postgresql://postgres:postgrespassword@127.0.0.1:5432/users_posts_test
+      DATABASE_URL: "postgresql://postgres:postgrespassword@127.0.0.1:5432/users_posts_migration"
+
+    services:
+      postgres:
+        image: postgres:15
+
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: users_posts_migration
+
+        ports:
+          - 5432:5432
+
+        options: >-
+          --health-cmd "pg_isready -U postgres -d users_posts_migration"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
 
-      - name: Install dependencies
+      - name: Install application dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Display execution context
-        run: |
-          python --version
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Commit SHA: ${{ github.sha }}"
+      - name: Display migration heads
+        run: alembic heads
 
-      - name: Run database migrations
+      - name: Upgrade blank database to head
         run: alembic upgrade head
 
-      - name: Run tests
-        run: python -m pytest -q
+      - name: Display current revision
+        run: alembic current
+
+      - name: Check models against migrations
+        run: alembic check
+
+  security-check:
+    name: Dependency security audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pip-audit
+
+      - name: Audit application dependencies
+        run: pip-audit -r requirements.txt
+
+  package:
+    name: Build application artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    needs:
+      - lint
+      - test
+      - migration-check
+      - security-check
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Verify package inputs
+        run: |
+          test -d app
+          test -d alembic
+          test -f alembic.ini
+          test -f requirements.txt
+          test -d scripts
+          test -f scripts/run-migrations.sh
+          test -f scripts/start-api.sh
+
+      - name: Create commit-specific ZIP artifact
+        env:
+          ARTIFACT_NAME: users-posts-api-${{ github.sha }}.zip
+        run: |
+          mkdir -p dist
+
+          git archive \
+            --format=zip \
+            --output="dist/${ARTIFACT_NAME}" \
+            "${GITHUB_SHA}" \
+            app \
+            alembic \
+            alembic.ini \
+            requirements.txt \
+            scripts
+
+          (
+            cd dist
+            sha256sum "${ARTIFACT_NAME}" \
+              > "${ARTIFACT_NAME}.sha256"
+          )
+
+          unzip -l "dist/${ARTIFACT_NAME}"
+
+      - name: Verify excluded files are absent
+        env:
+          ARTIFACT_NAME: users-posts-api-${{ github.sha }}.zip
+        run: |
+          if unzip -Z1 "dist/${ARTIFACT_NAME}" |
+            grep -Eq '(^|/)(\.env|\.git|venv|\.venv|__pycache__|\.pytest_cache|reports|tests)(/|$)|\.(db|sqlite|sqlite3)$'
+          then
+            echo "A forbidden file was found in the application artifact."
+            exit 1
+          fi
+
+          echo "Artifact exclusion check passed."
+
+      - name: Upload application artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: users-posts-api-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
