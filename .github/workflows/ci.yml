@@ -57,6 +57,7 @@ jobs:
 
     env:
       DATABASE_URL: "postgresql://postgres:postgrespassword@127.0.0.1:5432/users_posts_test"
+      COVERAGE_MIN: "98"
 
     services:
       postgres:
@@ -103,10 +104,11 @@ jobs:
       - name: Run tests with coverage
         run: |
           python -m pytest -q \
-            --cov=app \
-            --cov-report=term-missing \
-            --cov-report=xml:reports/coverage.xml \
-            --junitxml=reports/pytest.xml
+          --cov=app \
+          --cov-report=term-missing \
+          --cov-report=xml:reports/coverage.xml \
+          --junitxml=reports/pytest.xml \
+          --cov-fail-under="${COVERAGE_MIN}"
 
       - name: Save readable coverage report
         if: always()
