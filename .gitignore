@@ -27,3 +27,10 @@ build/
 .terraform/
 *.tfstate
 *.tfstate.*
+# Day 72 CI output
+.ruff_cache/
+
+coverage.xml
+htmlcov/
+reports/
+dist/
