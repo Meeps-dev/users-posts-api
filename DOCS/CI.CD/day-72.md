@@ -11,6 +11,10 @@
 - Used `pip-audit` to identify vulnerable Python dependencies.
 - Learned how workflow artifacts store test reports, coverage reports, and commit-specific ZIP deployment packages.
 
+- Initial measured coverage: 98%
+- Initial enforced threshold: 98%
+- The threshold was based on measured coverage, not an arbitrary target.
+
 ## What Broke
 
 - The test job failed with:
