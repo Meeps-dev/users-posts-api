@@ -1,4 +1,4 @@
-name: Day 73 - Application Deploy OIDC Test
+name: Application Deploy OIDC Test
 
 on:
   workflow_dispatch:
