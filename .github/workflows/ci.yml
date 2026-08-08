@@ -1,4 +1,4 @@
-name: Day 72 - Quality Gates and Package
+name: CI - Quality Gates and Package
 
 run-name: "CI | ${{ github.ref_name }} | ${{ github.sha }}"
 
@@ -229,6 +229,7 @@ jobs:
           test -d scripts
           test -f scripts/run-migrations.sh
           test -f scripts/start-api.sh
+          test -f scripts/deploy-ec2.sh
 
       - name: Create commit-specific ZIP artifact
         env:

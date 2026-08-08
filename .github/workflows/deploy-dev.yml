@@ -1,0 +1,569 @@
+name: Day 76 - Deploy FastAPI to EC2
+
+run-name: >-
+  Deploy |
+  ${{ github.event.workflow_run.head_sha }} |
+  dev
+
+on:
+  workflow_run:
+    workflows:
+      - "Day 72 - Quality Gates and Package"
+
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: users-posts-api-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Approved EC2 deployment
+
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+
+    environment:
+      name: dev
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+
+      DEPLOY_BUCKET: ${{ vars.DEPLOY_BUCKET }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      ALB_DNS_NAME: ${{ vars.ALB_DNS_NAME }}
+
+      RDS_ENDPOINT: ${{ vars.RDS_ENDPOINT }}
+      RDS_SECRET_ARN: ${{ vars.RDS_SECRET_ARN }}
+      DB_NAME: ${{ vars.DB_NAME }}
+
+      APPLICATION_NAME: users-posts-api
+
+      APP_PORT: "8080"
+      EXPECTED_APP_PORT: "8080"
+
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+
+    steps:
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_variables=(
+            AWS_REGION
+            AWS_ACCOUNT_ID
+            AWS_DEPLOY_ROLE_ARN
+            DEPLOY_BUCKET
+            EC2_INSTANCE_ID
+            ALB_DNS_NAME
+            RDS_ENDPOINT
+            RDS_SECRET_ARN
+            DB_NAME
+            DEPLOY_SHA
+            SOURCE_RUN_ID
+          )
+
+          for variable_name in "${required_variables[@]}"; do
+            if [[ -z "${!variable_name:-}" ]]; then
+              echo "Missing GitHub environment variable: ${variable_name}"
+              exit 1
+            fi
+          done
+
+          echo "Deployment variables are present."
+          echo "Commit: ${DEPLOY_SHA}"
+          echo "Instance: ${EC2_INSTANCE_ID}"
+
+      - name: Checkout exact successful commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Verify exact commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          checked_out_sha="$(git rev-parse HEAD)"
+
+          echo "CI SHA:       ${DEPLOY_SHA}"
+          echo "Checkout SHA: ${checked_out_sha}"
+
+          test "${checked_out_sha}" = "${DEPLOY_SHA}"
+
+      - name: Download successful CI artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: users-posts-api-${{ github.event.workflow_run.head_sha }}
+          path: downloaded-artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Verify and normalize application artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          original_zip="$(
+            find downloaded-artifact \
+              -type f \
+              -name "users-posts-api-${DEPLOY_SHA}.zip" \
+              -print \
+              -quit
+          )"
+
+          test -n "${original_zip}"
+          test -f "${original_zip}"
+
+          original_checksum="${original_zip}.sha256"
+
+          test -f "${original_checksum}"
+
+          (
+            cd "$(dirname "${original_zip}")"
+
+            sha256sum \
+              -c "$(basename "${original_checksum}")"
+          )
+
+          mkdir -p deployment-artifact
+
+          cp \
+            "${original_zip}" \
+            deployment-artifact/users-posts-api.zip
+
+          (
+            cd deployment-artifact
+
+            sha256sum users-posts-api.zip \
+              > users-posts-api.zip.sha256
+          )
+
+          unzip \
+            -tq \
+            deployment-artifact/users-posts-api.zip
+
+          echo "Artifact checksum and ZIP validation passed."
+
+      - name: Configure temporary AWS deployment credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+          role-session-name: >-
+            gha-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+
+      - name: Verify assumed deployment role
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          identity_arn="$(
+            aws sts get-caller-identity \
+              --query Arn \
+              --output text
+          )"
+
+          echo "Assumed identity: ${identity_arn}"
+
+          if [[ "${identity_arn}" != *":assumed-role/github-app-deploy-role/"* ]]
+          then
+            echo "Expected github-app-deploy-role."
+            exit 1
+          fi
+
+      - name: Upload immutable release to private S3
+        id: s3_upload
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          s3_prefix="releases/${APPLICATION_NAME}/${DEPLOY_SHA}"
+
+          aws s3 cp \
+            deployment-artifact/users-posts-api.zip \
+            "s3://${DEPLOY_BUCKET}/${s3_prefix}/users-posts-api.zip" \
+            --sse AES256 \
+            --only-show-errors
+
+          aws s3 cp \
+            deployment-artifact/users-posts-api.zip.sha256 \
+            "s3://${DEPLOY_BUCKET}/${s3_prefix}/users-posts-api.zip.sha256" \
+            --sse AES256 \
+            --only-show-errors
+
+          version_id="$(
+            aws s3api head-object \
+              --bucket "${DEPLOY_BUCKET}" \
+              --key "${s3_prefix}/users-posts-api.zip" \
+              --query VersionId \
+              --output text
+          )"
+
+          echo "S3 prefix: ${s3_prefix}"
+          echo "S3 Version ID: ${version_id}"
+
+          echo "s3_prefix=${s3_prefix}" \
+            >> "${GITHUB_OUTPUT}"
+
+          echo "version_id=${version_id}" \
+            >> "${GITHUB_OUTPUT}"
+
+      - name: Confirm EC2 is managed by Systems Manager
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ping_status="$(
+            aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=${EC2_INSTANCE_ID}" \
+              --query 'InstanceInformationList[0].PingStatus' \
+              --output text
+          )"
+
+          echo "SSM PingStatus: ${ping_status}"
+
+          test "${ping_status}" = "Online"
+
+      - name: Build remote deployment command
+        id: remote_command
+        shell: bash
+        env:
+          S3_PREFIX: ${{ steps.s3_upload.outputs.s3_prefix }}
+        run: |
+          set -euo pipefail
+
+          db_host="${RDS_ENDPOINT%:*}"
+          db_port="${RDS_ENDPOINT##*:}"
+
+          printf -v q_region '%q' "${AWS_REGION}"
+          printf -v q_bucket '%q' "${DEPLOY_BUCKET}"
+          printf -v q_prefix '%q' "${S3_PREFIX}"
+          printf -v q_sha '%q' "${DEPLOY_SHA}"
+          printf -v q_secret '%q' "${RDS_SECRET_ARN}"
+          printf -v q_db_host '%q' "${db_host}"
+          printf -v q_db_port '%q' "${db_port}"
+          printf -v q_db_name '%q' "${DB_NAME}"
+          printf -v q_app_port '%q' "${APP_PORT}"
+          printf -v q_expected_port '%q' "${EXPECTED_APP_PORT}"
+
+          remote_script="${RUNNER_TEMP}/day76-remote-deploy.sh"
+
+          cat > "${remote_script}" <<EOF
+          #!/usr/bin/env bash
+
+          set -Eeuo pipefail
+
+          AWS_REGION=${q_region}
+          DEPLOY_BUCKET=${q_bucket}
+          S3_PREFIX=${q_prefix}
+          DEPLOY_SHA=${q_sha}
+          RDS_SECRET_ARN=${q_secret}
+          DB_HOST=${q_db_host}
+          DB_PORT=${q_db_port}
+          DB_NAME=${q_db_name}
+          APP_PORT=${q_app_port}
+          EXPECTED_PORT=${q_expected_port}
+
+          WORK_DIR="/tmp/users-posts-api-\${DEPLOY_SHA}"
+
+          rm -rf "\${WORK_DIR}"
+
+          mkdir -p \
+            "\${WORK_DIR}/source"
+
+          aws s3 cp \
+            "s3://\${DEPLOY_BUCKET}/\${S3_PREFIX}/users-posts-api.zip" \
+            "\${WORK_DIR}/users-posts-api.zip" \
+            --region "\${AWS_REGION}" \
+            --only-show-errors
+
+          aws s3 cp \
+            "s3://\${DEPLOY_BUCKET}/\${S3_PREFIX}/users-posts-api.zip.sha256" \
+            "\${WORK_DIR}/users-posts-api.zip.sha256" \
+            --region "\${AWS_REGION}" \
+            --only-show-errors
+
+          (
+            cd "\${WORK_DIR}"
+
+            sha256sum \
+              -c users-posts-api.zip.sha256
+          )
+
+          python3 \
+            -m zipfile \
+            -e \
+            "\${WORK_DIR}/users-posts-api.zip" \
+            "\${WORK_DIR}/source"
+
+          test -f \
+            "\${WORK_DIR}/source/scripts/deploy-ec2.sh"
+
+          RELEASE_SHA="\${DEPLOY_SHA}" \
+          SOURCE_DIR="\${WORK_DIR}/source" \
+          AWS_REGION="\${AWS_REGION}" \
+          RDS_SECRET_ARN="\${RDS_SECRET_ARN}" \
+          DB_HOST="\${DB_HOST}" \
+          DB_PORT="\${DB_PORT}" \
+          DB_NAME="\${DB_NAME}" \
+          APP_PORT="\${APP_PORT}" \
+          EXPECTED_PORT="\${EXPECTED_PORT}" \
+            bash "\${WORK_DIR}/source/scripts/deploy-ec2.sh"
+
+          rm -rf "\${WORK_DIR}"
+          EOF
+
+          chmod 0700 "${remote_script}"
+
+          remote_payload="$(
+            base64 \
+              -w 0 \
+              "${remote_script}"
+          )"
+
+          jq \
+            -n \
+            --arg payload "${remote_payload}" \
+            '{
+              commands: [
+                "echo " + $payload + " | base64 -d > /tmp/day76-deploy.sh",
+                "chmod 700 /tmp/day76-deploy.sh",
+                "/tmp/day76-deploy.sh"
+              ]
+            }' \
+            > "${RUNNER_TEMP}/ssm-parameters.json"
+
+      - name: Send deployment command through SSM
+        id: ssm
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          command_id="$(
+            aws ssm send-command \
+              --instance-ids "${EC2_INSTANCE_ID}" \
+              --document-name "AWS-RunShellScript" \
+              --comment "Deploy users-posts-api ${DEPLOY_SHA}" \
+              --parameters "file://${RUNNER_TEMP}/ssm-parameters.json" \
+              --timeout-seconds 1800 \
+              --query 'Command.CommandId' \
+              --output text
+          )"
+
+          echo "SSM Command ID: ${command_id}"
+
+          echo "command_id=${command_id}" \
+            >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for SSM deployment and display output
+        shell: bash
+        env:
+          COMMAND_ID: ${{ steps.ssm.outputs.command_id }}
+        run: |
+          set -euo pipefail
+
+          final_status="Pending"
+
+          for attempt in $(seq 1 180); do
+            current_status="$(
+              aws ssm get-command-invocation \
+                --command-id "${COMMAND_ID}" \
+                --instance-id "${EC2_INSTANCE_ID}" \
+                --query Status \
+                --output text 2>/dev/null || true
+            )"
+
+            if [[ -z "${current_status}" ]] ||
+               [[ "${current_status}" == "None" ]]; then
+              current_status="Pending"
+            fi
+
+            echo "Attempt ${attempt}: ${current_status}"
+
+            case "${current_status}" in
+              Success)
+                final_status="Success"
+                break
+                ;;
+
+              Failed|Cancelled|TimedOut|Undeliverable|Terminated)
+                final_status="${current_status}"
+                break
+                ;;
+
+              *)
+                sleep 10
+                ;;
+            esac
+          done
+
+          aws ssm get-command-invocation \
+            --command-id "${COMMAND_ID}" \
+            --instance-id "${EC2_INSTANCE_ID}" \
+            --query '{
+              Status:Status,
+              ResponseCode:ResponseCode,
+              StandardOutput:StandardOutputContent,
+              StandardError:StandardErrorContent
+            }' \
+            --output json
+
+          if [[ "${final_status}" != "Success" ]]; then
+            echo "SSM deployment failed with status: ${final_status}"
+            exit 1
+          fi
+
+      - name: Wait for ALB health endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base_url="http://${ALB_DNS_NAME}"
+          alb_healthy="false"
+
+          for attempt in {1..30}; do
+            if curl \
+              -fsS \
+              "${base_url}/health" \
+              >/dev/null; then
+
+              alb_healthy="true"
+              break
+            fi
+
+            echo "ALB health attempt ${attempt} failed."
+            sleep 10
+          done
+
+          if [[ "${alb_healthy}" != "true" ]]; then
+            echo "ALB health check failed."
+            exit 1
+          fi
+
+          curl \
+            -fsS \
+            "${base_url}/health"
+
+      - name: Run users and posts smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base_url="http://${ALB_DNS_NAME}"
+          short_sha="${DEPLOY_SHA:0:12}"
+
+          user_request="$(
+            jq \
+              -nc \
+              --arg name "Day 76 User" \
+              --arg email "day76-${short_sha}@example.com" \
+              '{
+                name: $name,
+                email: $email
+              }'
+          )"
+
+          user_response="$(
+            curl \
+              -fsS \
+              -X POST \
+              "${base_url}/users/" \
+              -H "Content-Type: application/json" \
+              -d "${user_request}"
+          )"
+
+          echo "${user_response}"
+
+          user_id="$(
+            jq \
+              -r \
+              '.id' \
+              <<< "${user_response}"
+          )"
+
+          test "${user_id}" != "null"
+
+          curl \
+            -fsS \
+            "${base_url}/users/"
+
+          post_request="$(
+            jq \
+              -nc \
+              --arg title "Day 76 deployment" \
+              --arg content "Created through the EC2 deployment smoke test." \
+              '{
+                title: $title,
+                content: $content
+              }'
+          )"
+
+          curl \
+            -fsS \
+            -X POST \
+            "${base_url}/posts/users/${user_id}" \
+            -H "Content-Type: application/json" \
+            -d "${post_request}"
+
+          curl \
+            -fsS \
+            "${base_url}/posts/users/${user_id}"
+
+      - name: Record deployment summary
+        if: success()
+        shell: bash
+        env:
+          S3_PREFIX: ${{ steps.s3_upload.outputs.s3_prefix }}
+          S3_VERSION_ID: ${{ steps.s3_upload.outputs.version_id }}
+          COMMAND_ID: ${{ steps.ssm.outputs.command_id }}
+        run: |
+          {
+            echo "## Day 76 EC2 Deployment"
+            echo
+            echo "- Commit: \`${DEPLOY_SHA}\`"
+            echo "- Environment: \`dev\`"
+            echo "- Instance: \`${EC2_INSTANCE_ID}\`"
+            echo "- S3 prefix: \`${S3_PREFIX}\`"
+            echo "- S3 version: \`${S3_VERSION_ID}\`"
+            echo "- SSM command: \`${COMMAND_ID}\`"
+            echo "- ALB: \`http://${ALB_DNS_NAME}\`"
+            echo "- Health: passed"
+            echo "- Users API: passed"
+            echo "- Posts API: passed"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Remove temporary deployment files
+        if: always()
+        shell: bash
+        run: |
+          rm -rf \
+            downloaded-artifact \
+            deployment-artifact \
+            "${RUNNER_TEMP}/day76-remote-deploy.sh" \
+            "${RUNNER_TEMP}/ssm-parameters.json"
