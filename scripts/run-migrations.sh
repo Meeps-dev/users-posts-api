@@ -6,4 +6,5 @@ set -Eeuo pipefail
 
 alembic upgrade head
 
-# Added deployment/runtime scripts to the artifact
+# updates the alembic version table to the latest revision
+# data migrations are run in the deploy-ec2.sh script
