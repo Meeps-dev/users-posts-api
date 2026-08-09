@@ -1,6 +1,6 @@
-# Ec2 de1ployment script
-
 #!/usr/bin/env bash
+
+# EC2 deployment script.
 
 set -Eeuo pipefail
 
@@ -34,6 +34,7 @@ CURRENT_LINK="${APP_ROOT}/current"
 VENV_DIR="${APP_ROOT}/venv"
 
 SERVICE_NAME="${APP_NAME}.service"
+SERVICE_UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}"
 PLACEHOLDER_SERVICE="meeps-backend.service"
 
 previous_release=""
@@ -82,18 +83,23 @@ rollback() {
   elif [[ "${placeholder_was_active}" == "true" ]]; then
     echo "No previous FastAPI release. Restoring placeholder service."
 
-    systemctl disable --now "${SERVICE_NAME}" 2>/dev/null
+    if [[ -f "${SERVICE_UNIT_PATH}" ]]; then
+      systemctl disable --now "${SERVICE_NAME}" || true
+    fi
+
     systemctl enable --now "${PLACEHOLDER_SERVICE}"
   fi
 
-  systemctl status "${SERVICE_NAME}" \
-    --no-pager \
-    --full || true
+  if [[ -f "${SERVICE_UNIT_PATH}" ]]; then
+    systemctl status "${SERVICE_NAME}" \
+      --no-pager \
+      --full || true
 
-  journalctl \
-    -u "${SERVICE_NAME}" \
-    -n 100 \
-    --no-pager || true
+    journalctl \
+      -u "${SERVICE_NAME}" \
+      -n 100 \
+      --no-pager || true
+  fi
 
   exit "${exit_code}"
 }
@@ -181,7 +187,12 @@ PYTHON
 
 unset SECRET_JSON
 
-umask 077
+install \
+  -o "${APP_USER}" \
+  -g "${APP_GROUP}" \
+  -m 0600 \
+  /dev/null \
+  "${RELEASE_DIR}/.env"
 
 cat > "${RELEASE_DIR}/.env" <<EOF
 DATABASE_URL=${DATABASE_URL}
@@ -205,16 +216,19 @@ fi
   --no-cache-dir \
   -r "${RELEASE_DIR}/requirements.txt"
 
+chown -R "root:${APP_GROUP}" "${VENV_DIR}"
+chmod -R u=rwX,g=rX,o= "${VENV_DIR}"
+
 echo "Running Alembic migrations."
 
-(
-  cd "${RELEASE_DIR}"
+pushd "${RELEASE_DIR}" >/dev/null
 
-  DATABASE_URL="${DATABASE_URL}" \
-    "${VENV_DIR}/bin/alembic" upgrade head
-)
+DATABASE_URL="${DATABASE_URL}" \
+  "${VENV_DIR}/bin/alembic" upgrade head
 
-cat > "/etc/systemd/system/${SERVICE_NAME}" <<'SERVICE'
+popd >/dev/null
+
+cat > "${SERVICE_UNIT_PATH}" <<'SERVICE'
 [Unit]
 Description=Users Posts FastAPI service
 After=network-online.target
@@ -242,6 +256,8 @@ PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 SERVICE
+
+chmod 0644 "${SERVICE_UNIT_PATH}"
 
 echo "Stopping the temporary placeholder backend."
 
