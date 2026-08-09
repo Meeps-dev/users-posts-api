@@ -34,7 +34,10 @@ A **FastAPI backend project** demonstrating user and post management with Postgr
 
 ```text
 users-posts-api/
-│
+├── .github/
+│   └── workflows/
+│       ├── ci.yml
+│       └── deploy-dev.yml
 ├── app/
 │   ├── main.py          # FastAPI application entry point
 │   ├── config.py        # Centralized settings & env configuration
@@ -42,14 +45,60 @@ users-posts-api/
 │   ├── models/          # ORM models (User, Post)
 │   ├── schemas/         # Pydantic schemas (User, Post)
 │   └── routers/         # API routes (users, posts)
-│
 ├── alembic/             # Migration environment & revision scripts
 ├── tests/               # Pytest test suite
+├── deploy/
+│   └── users-posts-api.service  # Versioned systemd unit
+├── scripts/
+│   ├── package.sh       # Build the immutable application ZIP
+│   ├── deploy.sh        # Install and activate a release on EC2
+│   ├── health-check.sh  # Poll an application health endpoint
+│   └── rollback.sh      # Restore the previous healthy release
 ├── .env                 # Local environment variables (git-ignored)
 ├── .env.example         # Template for environment variables
 ├── requirements.txt     # Python dependencies
 └── README.md
 ```
+
+---
+
+## 📦 Deployment Assets
+
+The deployment files are separated by responsibility:
+
+- `scripts/package.sh` builds a commit-specific ZIP and SHA-256 checksum.
+- `scripts/deploy.sh` installs a release, retrieves the RDS secret, runs
+  migrations, installs the systemd unit, and switches the `current` symlink.
+- `scripts/health-check.sh` polls any supplied health URL with configurable
+  retry settings.
+- `scripts/rollback.sh` is called internally by `deploy.sh` to restore the
+  previous release, release-local virtual environment, and systemd unit.
+- `deploy/users-posts-api.service` is the version-controlled service definition.
+
+Build an artifact locally from a committed revision:
+
+```bash
+bash scripts/package.sh \
+  --ref "$(git rev-parse HEAD)" \
+  --output "dist/users-posts-api.zip"
+```
+
+Run a health check:
+
+```bash
+HEALTH_CHECK_ATTEMPTS=30 \
+HEALTH_CHECK_INTERVAL_SECONDS=5 \
+  bash scripts/health-check.sh http://127.0.0.1:8080/health
+```
+
+The CD workflow invokes `deploy.sh` through SSM. It supplies `RELEASE_SHA`,
+`SOURCE_DIR`, `AWS_REGION`, `RDS_SECRET_ARN`, `DB_HOST`, `DB_PORT`, `DB_NAME`,
+`APP_PORT`, and `EXPECTED_PORT`; database credentials are retrieved only on EC2.
+`rollback.sh` is an internal script and should not be invoked manually.
+
+Each release has its own `.venv`, so switching the release symlink also switches
+its Python dependencies. Alembic migrations must remain backward-compatible:
+application rollback does not reverse database migrations that already committed.
 
 ---
 

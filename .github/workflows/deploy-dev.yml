@@ -323,7 +323,10 @@ jobs:
             "\${WORK_DIR}/source"
 
           test -f \
-            "\${WORK_DIR}/source/scripts/deploy-ec2.sh"
+            "\${WORK_DIR}/source/scripts/deploy.sh"
+
+          test -f \
+            "\${WORK_DIR}/source/deploy/users-posts-api.service"
 
           RELEASE_SHA="\${DEPLOY_SHA}" \
           SOURCE_DIR="\${WORK_DIR}/source" \
@@ -334,7 +337,7 @@ jobs:
           DB_NAME="\${DB_NAME}" \
           APP_PORT="\${APP_PORT}" \
           EXPECTED_PORT="\${EXPECTED_PORT}" \
-            bash "\${WORK_DIR}/source/scripts/deploy-ec2.sh"
+            bash "\${WORK_DIR}/source/scripts/deploy.sh"
 
           rm -rf "\${WORK_DIR}"
           EOF
@@ -445,26 +448,12 @@ jobs:
           set -euo pipefail
 
           base_url="http://${ALB_DNS_NAME}"
-          alb_healthy="false"
 
-          for attempt in {1..30}; do
-            if curl \
-              -fsS \
-              "${base_url}/health" \
-              >/dev/null; then
-
-              alb_healthy="true"
-              break
-            fi
-
-            echo "ALB health attempt ${attempt} failed."
-            sleep 10
-          done
-
-          if [[ "${alb_healthy}" != "true" ]]; then
-            echo "ALB health check failed."
-            exit 1
-          fi
+          HEALTH_CHECK_ATTEMPTS=30 \
+          HEALTH_CHECK_INTERVAL_SECONDS=10 \
+            bash \
+              scripts/health-check.sh \
+              "${base_url}/health"
 
           curl \
             -fsS \
@@ -477,26 +466,32 @@ jobs:
 
           base_url="http://${ALB_DNS_NAME}"
           short_sha="${DEPLOY_SHA:0:12}"
+          smoke_test_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           user_request="$(
             jq \
               -nc \
               --arg name "Day 76 User" \
-              --arg email "day76-${short_sha}@example.com" \
+              --arg email "day76-${short_sha}-${smoke_test_id}@example.com" \
               '{
                 name: $name,
                 email: $email
               }'
           )"
 
-          user_response="$(
+          if ! user_response="$(
             curl \
-              -fsS \
+              --fail-with-body \
+              --silent \
+              --show-error \
               -X POST \
               "${base_url}/users/" \
               -H "Content-Type: application/json" \
               -d "${user_request}"
-          )"
+          )"; then
+            echo "${user_response}" >&2
+            exit 1
+          fi
 
           echo "${user_response}"
 
@@ -510,7 +505,9 @@ jobs:
           test "${user_id}" != "null"
 
           curl \
-            -fsS \
+            --fail-with-body \
+            --silent \
+            --show-error \
             "${base_url}/users/"
 
           post_request="$(
@@ -525,14 +522,18 @@ jobs:
           )"
 
           curl \
-            -fsS \
+            --fail-with-body \
+            --silent \
+            --show-error \
             -X POST \
             "${base_url}/posts/users/${user_id}" \
             -H "Content-Type: application/json" \
             -d "${post_request}"
 
           curl \
-            -fsS \
+            --fail-with-body \
+            --silent \
+            --show-error \
             "${base_url}/posts/users/${user_id}"
 
       - name: Record deployment summary

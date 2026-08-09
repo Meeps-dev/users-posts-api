@@ -8,6 +8,7 @@
 - Uploaded the ZIP file and checksum to the private versioned S3 deployment bucket.
 - Used AWS Systems Manager Run Command to deploy to the private EC2 instance.
 - Configured release directories, a `current` symlink, systemd, Alembic migrations, health checks, and rollback handling.
+- Separated packaging, deployment, health-check, rollback, and systemd assets into version-controlled files.
 - Added ALB, users, and posts smoke-test steps.
 
 ## What I Learned
@@ -36,6 +37,9 @@
 - Added an idempotent repair migration for environments with missing `users` or `posts` tables.
 - Corrected EC2 virtual-environment permissions and first-deployment rollback logic.
 - Added a regression test for percent-encoded database credentials.
+- Refactored deployment assets into `scripts/package.sh`, `scripts/deploy.sh`,
+  `scripts/health-check.sh`, `scripts/rollback.sh`, and
+  `deploy/users-posts-api.service`.
 
 ## Verification
 

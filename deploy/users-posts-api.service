@@ -1,0 +1,30 @@
+## After deploy.sh finishes successfully ,
+## this systemd-file keeps the API running inside the server 
+## not the deployment script...
+
+[Unit]
+Description=Users Posts FastAPI service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=users-posts-api
+Group=users-posts-api
+
+WorkingDirectory=/opt/users-posts-api/current
+EnvironmentFile=/opt/users-posts-api/current/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/opt/users-posts-api/current/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+
+ExecStart=/opt/users-posts-api/current/.venv/bin/python -m uvicorn app.main:app --host ${HOST} --port ${PORT}
+
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

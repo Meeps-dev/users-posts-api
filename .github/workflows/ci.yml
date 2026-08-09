@@ -226,47 +226,23 @@ jobs:
           test -d alembic
           test -f alembic.ini
           test -f requirements.txt
+          test -d deploy
+          test -f deploy/users-posts-api.service
           test -d scripts
-          test -f scripts/run-migrations.sh
-          test -f scripts/start-api.sh
-          test -f scripts/deploy-ec2.sh
+          test -f scripts/package.sh
+          test -f scripts/deploy.sh
+          test -f scripts/health-check.sh
+          test -f scripts/rollback.sh
+
+          bash -n scripts/*.sh
 
       - name: Create commit-specific ZIP artifact
         env:
           ARTIFACT_NAME: users-posts-api-${{ github.sha }}.zip
         run: |
-          mkdir -p dist
-
-          git archive \
-            --format=zip \
-            --output="dist/${ARTIFACT_NAME}" \
-            "${GITHUB_SHA}" \
-            app \
-            alembic \
-            alembic.ini \
-            requirements.txt \
-            scripts
-
-          (
-            cd dist
-            sha256sum "${ARTIFACT_NAME}" \
-              > "${ARTIFACT_NAME}.sha256"
-          )
-
-          unzip -l "dist/${ARTIFACT_NAME}"
-
-      - name: Verify excluded files are absent
-        env:
-          ARTIFACT_NAME: users-posts-api-${{ github.sha }}.zip
-        run: |
-          if unzip -Z1 "dist/${ARTIFACT_NAME}" |
-            grep -Eq '(^|/)(\.env|\.git|venv|\.venv|__pycache__|\.pytest_cache|reports|tests)(/|$)|\.(db|sqlite|sqlite3)$'
-          then
-            echo "A forbidden file was found in the application artifact."
-            exit 1
-          fi
-
-          echo "Artifact exclusion check passed."
+          bash scripts/package.sh \
+            --ref "${GITHUB_SHA}" \
+            --output "dist/${ARTIFACT_NAME}"
 
       - name: Upload application artifact
         uses: actions/upload-artifact@v7

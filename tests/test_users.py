@@ -24,3 +24,21 @@ def test_get_users():
     assert isinstance(users, list)
     assert len(users) > 0
     assert any(u["email"] == unique_email for u in users)
+
+
+def test_create_user_rejects_duplicate_email():
+    unique_email = f"duplicate_{uuid.uuid4()}@test.com"
+    user = {"name": "Duplicate User", "email": unique_email}
+
+    first_response = client.post("/users/", json=user)
+    duplicate_response = client.post("/users/", json=user)
+
+    assert first_response.status_code == 200
+    assert duplicate_response.status_code == 409
+    assert duplicate_response.json() == {
+        "detail": "A user with this email already exists."
+    }
+
+    users_response = client.get("/users/")
+    assert users_response.status_code == 200
+    assert sum(user["email"] == unique_email for user in users_response.json()) == 1
