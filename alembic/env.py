@@ -5,12 +5,20 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 from app.config import settings
 from app.database import Base
+from app.models.post import Post  # noqa: F401
+from app.models.user import User  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Alembic stores options in ConfigParser, where percent signs trigger
+# interpolation. Preserve URL-encoded credentials such as ``%40`` by escaping
+# percent signs before placing the database URL in the Alembic config object.
+config.set_main_option(
+    "sqlalchemy.url",
+    settings.DATABASE_URL.replace("%", "%%"),
+)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
