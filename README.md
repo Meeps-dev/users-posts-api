@@ -132,7 +132,8 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 
-Update `DATABASE_URL` in `.env` with your local PostgreSQL database credentials.
+Set the required `DATABASE_URL` in `.env` with your local PostgreSQL database
+credentials. The application exits during startup when this value is missing.
 
 ### 5. Setup PostgreSQL Database
 
