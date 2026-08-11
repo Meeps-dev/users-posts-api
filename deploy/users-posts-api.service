@@ -1,5 +1,5 @@
-## After deploy.sh finishes successfully ,
-## this systemd-file keeps the API running inside the server 
+## After deploy.sh finishes successfully inside the ec2 ,
+## this systemd-file keeps the API running inside it 
 ## not the deployment script...
 
 [Unit]

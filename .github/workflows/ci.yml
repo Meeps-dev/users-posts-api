@@ -28,10 +28,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -56,7 +56,8 @@ jobs:
     timeout-minutes: 15
 
     env:
-      DATABASE_URL: "postgresql://postgres:postgrespassword@127.0.0.1:5432/users_posts_test"
+      DATABASE_URL: >-
+        postgresql://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5432/users_posts_test
       COVERAGE_MIN: "98"
 
     services:
@@ -65,7 +66,7 @@ jobs:
 
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
           POSTGRES_DB: users_posts_test
 
         ports:
@@ -79,10 +80,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -120,7 +121,7 @@ jobs:
 
       - name: Upload test and coverage reports
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-reports-${{ github.sha }}
           path: reports/
@@ -133,7 +134,8 @@ jobs:
     timeout-minutes: 15
 
     env:
-      DATABASE_URL: "postgresql://postgres:postgrespassword@127.0.0.1:5432/users_posts_migration"
+      DATABASE_URL: >-
+        postgresql://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5432/users_posts_migration
 
     services:
       postgres:
@@ -141,7 +143,7 @@ jobs:
 
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
           POSTGRES_DB: users_posts_migration
 
         ports:
@@ -155,10 +157,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -188,10 +190,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -218,7 +220,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Verify package inputs
         run: |
@@ -245,7 +247,7 @@ jobs:
             --output "dist/${ARTIFACT_NAME}"
 
       - name: Upload application artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: users-posts-api-${{ github.sha }}
           path: dist/

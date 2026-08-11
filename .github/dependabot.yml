@@ -1,0 +1,11 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+# updates versions used in GitHub Actions workflows (files under workflows).
+# It will not update Python packages (no pip/poetry entry).

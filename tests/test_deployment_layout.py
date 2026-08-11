@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -53,3 +54,71 @@ def test_deployment_smoke_data_is_unique_per_workflow_attempt():
     assert "day76-${short_sha}-${smoke_test_id}@example.com" in cd_workflow
     assert "day76-${short_sha}@example.com" not in cd_workflow
     assert cd_workflow.count("--fail-with-body") >= 4
+
+
+def test_external_workflow_actions_are_pinned_to_full_commit_shas():
+    uses_lines = []
+    workflow_directory = PROJECT_ROOT / ".github/workflows"
+    workflows = (*workflow_directory.glob("*.yml"), *workflow_directory.glob("*.yaml"))
+
+    for workflow in workflows:
+        for line_number, line in enumerate(workflow.read_text().splitlines(), start=1):
+            uses_match = re.match(r"^\s*uses:\s*(.+)$", line)
+            if not uses_match:
+                continue
+
+            action_and_comment = uses_match.group(1)
+            action, _, version_comment = action_and_comment.partition("#")
+            action = action.strip()
+
+            if action.startswith("./"):
+                continue
+
+            uses_lines.append((workflow, line_number, action, version_comment.strip()))
+
+    assert uses_lines
+
+    for workflow, line_number, action, version_comment in uses_lines:
+        location = f"{workflow}:{line_number}"
+
+        if action.startswith("docker://"):
+            assert re.fullmatch(r"docker://[^@\s]+@sha256:[0-9a-f]{64}", action), (
+                f"{location} must pin {action!r} to an image digest"
+            )
+            continue
+
+        assert re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", action), (
+            f"{location} must pin {action!r} to a full commit SHA"
+        )
+        assert re.fullmatch(r"v\d+\.\d+\.\d+", version_comment), (
+            f"{location} must retain an exact version comment"
+        )
+
+
+def test_committed_configuration_has_no_fallback_database_password():
+    workflow_directory = PROJECT_ROOT / ".github/workflows"
+    checked_files = (
+        PROJECT_ROOT / "app/config.py",
+        PROJECT_ROOT / ".env.example",
+        *workflow_directory.glob("*.yml"),
+        *workflow_directory.glob("*.yaml"),
+    )
+
+    for path in checked_files:
+        contents = path.read_text()
+
+        assert not re.search(r"postgresql://[^:\s]+:[^@${}\s]+@", contents), path
+
+        if path.parent == workflow_directory:
+            password_values = re.findall(
+                r"^\s*POSTGRES_PASSWORD:\s*(.+)$",
+                contents,
+                flags=re.MULTILINE,
+            )
+            assert all("${{" in value for value in password_values), path
+
+    env_template = (PROJECT_ROOT / ".env.example").read_text().splitlines()
+    database_url_assignments = [
+        line for line in env_template if line.startswith("DATABASE_URL=")
+    ]
+    assert database_url_assignments == ["DATABASE_URL="]

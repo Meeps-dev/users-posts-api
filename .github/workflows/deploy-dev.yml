@@ -25,6 +25,7 @@ jobs:
     name: Approved EC2 deployment
 
     if: >-
+      vars.DEPLOY_EC2_ENABLED == 'true' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
@@ -95,7 +96,7 @@ jobs:
           echo "Instance: ${EC2_INSTANCE_ID}"
 
       - name: Checkout exact successful commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
@@ -113,7 +114,7 @@ jobs:
           test "${checked_out_sha}" = "${DEPLOY_SHA}"
 
       - name: Download successful CI artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: users-posts-api-${{ github.event.workflow_run.head_sha }}
           path: downloaded-artifact
@@ -167,7 +168,7 @@ jobs:
           echo "Artifact checksum and ZIP validation passed."
 
       - name: Configure temporary AWS deployment credentials
-        uses: aws-actions/configure-aws-credentials@v6.2.3
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
