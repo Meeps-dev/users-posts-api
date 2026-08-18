@@ -11,8 +11,10 @@ __pycache__/
 # Database files (SQLite or temp)
 *.db
 
-# Environment variables
+# Environment files and secrets
 .env
+.env.*
+!.env.example
 
 # Alembic cache (optional)
 alembic/versions/*.pyc
