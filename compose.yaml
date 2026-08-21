@@ -1,7 +1,7 @@
 name: meeps-users-posts
 
 x-app-common: &app-common
-  image: meeps-users-posts-api:compose
+  image: ${APP_IMAGE:-meeps-users-posts-api:compose}
   environment:
     DATABASE_URL: >-
       postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
