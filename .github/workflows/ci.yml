@@ -277,7 +277,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd8d7d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Build container image for pull request
         if: github.event_name == 'pull_request'
@@ -361,7 +361,7 @@ jobs:
           set -euo pipefail
 
           docker run --rm \
-            --env DATABASE_URL='postgresql://postgres:ci-only@127.0.0.1:5432/container_validation' \
+            --env DATABASE_URL='postgresql://postgres@127.0.0.1:5432/container_validation' \
             "${IMAGE_REF}" \
             python -c \
             'from app.main import app; print("PASS: app.main:app imported from container image")'
@@ -521,7 +521,7 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.existing-image.outputs.exists != 'true'
-        uses: docker/setup-buildx-action@bb05f3f5519dd8d7d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Login to Amazon ECR
         if: steps.existing-image.outputs.exists != 'true'
