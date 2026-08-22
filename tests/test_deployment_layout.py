@@ -97,28 +97,36 @@ def test_external_workflow_actions_are_pinned_to_full_commit_shas():
 
 def test_committed_configuration_has_no_fallback_database_password():
     workflow_directory = PROJECT_ROOT / ".github/workflows"
-    checked_files = (
-        PROJECT_ROOT / "app/config.py",
-        PROJECT_ROOT / ".env.example",
-        *workflow_directory.glob("*.yml"),
-        *workflow_directory.glob("*.yaml"),
-    )
-
-    for path in checked_files:
-        contents = path.read_text()
-
-        assert not re.search(r"postgresql://[^:\s]+:[^@${}\s]+@", contents), path
-
-        if path.parent == workflow_directory:
-            password_values = re.findall(
-                r"^\s*POSTGRES_PASSWORD:\s*(.+)$",
-                contents,
-                flags=re.MULTILINE,
-            )
-            assert all("${{" in value for value in password_values), path
-
+    config_source = (PROJECT_ROOT / "app/config.py").read_text()
     env_template = (PROJECT_ROOT / ".env.example").read_text().splitlines()
-    database_url_assignments = [
-        line for line in env_template if line.startswith("DATABASE_URL=")
-    ]
-    assert database_url_assignments == ["DATABASE_URL="]
+    workflows = (*workflow_directory.glob("*.yml"), *workflow_directory.glob("*.yaml"))
+
+    assert "postgresql://" not in config_source
+
+    env_assignments = {}
+    for line in env_template:
+        stripped_line = line.strip()
+        if not stripped_line or stripped_line.startswith("#"):
+            continue
+
+        name, separator, value = stripped_line.partition("=")
+        assert separator, f"Invalid environment assignment: {line!r}"
+        env_assignments[name] = value
+
+    assert "DATABASE_URL" not in env_assignments
+    assert env_assignments["POSTGRES_PASSWORD"] == "replace_with_random_hex_value"
+
+    for path in workflows:
+        contents = path.read_text()
+        database_passwords = re.findall(
+            r"postgresql://[^:\s]+:([^@\s]+)@",
+            contents,
+        )
+        assert all("${{" in password for password in database_passwords), path
+
+        password_values = re.findall(
+            r"^\s*POSTGRES_PASSWORD:\s*(.+)$",
+            contents,
+            flags=re.MULTILINE,
+        )
+        assert all("${{" in value for value in password_values), path
