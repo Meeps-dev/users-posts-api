@@ -253,3 +253,424 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 7
+
+  container-build:
+    name: Build and validate container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    needs:
+      - lint
+      - test
+      - migration-check
+      - security-check
+
+    permissions:
+      contents: read
+
+    env:
+      IMAGE_REF: meeps-users-posts-api:ci-${{ github.sha }}
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build container image for pull request
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          pull: true
+          tags: ${{ env.IMAGE_REF }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.sha }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=meeps-users-posts-api
+
+      - name: Build container image for trusted branch
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          pull: true
+          tags: ${{ env.IMAGE_REF }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.sha }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=meeps-users-posts-api
+          cache-to: type=gha,mode=max,scope=meeps-users-posts-api
+
+      - name: Validate container platform and runtime security
+        run: |
+          set -euo pipefail
+
+          PLATFORM="$(
+            docker image inspect \
+              --format '{{.Os}}/{{.Architecture}}' \
+              "${IMAGE_REF}"
+          )"
+
+          RUNTIME_USER="$(
+            docker image inspect \
+              --format '{{.Config.User}}' \
+              "${IMAGE_REF}"
+          )"
+
+          SIZE_BYTES="$(
+            docker image inspect \
+              --format '{{.Size}}' \
+              "${IMAGE_REF}"
+          )"
+
+          echo "Image: ${IMAGE_REF}"
+          echo "Platform: ${PLATFORM}"
+          echo "Runtime user: ${RUNTIME_USER}"
+          echo "Size: ${SIZE_BYTES} bytes"
+
+          test "${PLATFORM}" = "linux/amd64"
+          test "${RUNTIME_USER}" = "app:app"
+
+          docker run --rm \
+            "${IMAGE_REF}" \
+            id |
+          tee /tmp/container-runtime-user.txt
+
+          grep -q 'uid=10001(app)' \
+            /tmp/container-runtime-user.txt
+
+      - name: Verify the FastAPI module imports
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            --env DATABASE_URL='postgresql://postgres@127.0.0.1:5432/container_validation' \
+            "${IMAGE_REF}" \
+            python -c \
+            'from app.main import app; print("PASS: app.main:app imported from container image")'
+
+      - name: Check for sensitive values baked into the image
+        run: |
+          set -euo pipefail
+
+          IMAGE_ENV="$(
+            docker image inspect \
+              --format '{{range .Config.Env}}{{println .}}{{end}}' \
+              "${IMAGE_REF}"
+          )"
+
+          if printf '%s\n' "${IMAGE_ENV}" |
+            grep -Eq \
+            '^(DATABASE_URL|POSTGRES_PASSWORD|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)='; then
+
+            echo "::error::Sensitive runtime configuration was baked into the image"
+            exit 1
+          fi
+
+          echo "PASS: no sensitive runtime configuration baked into image"
+
+  container-publish:
+    name: Publish immutable container image to ECR
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    needs:
+      - package
+      - container-build
+
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'Meeps-dev/users-posts-api'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    concurrency:
+      group: ecr-publish-${{ github.ref }}
+      cancel-in-progress: false
+
+    env:
+      AWS_REGION: "${{ vars.AWS_REGION }}"
+      AWS_ACCOUNT_ID: "${{ vars.AWS_ACCOUNT_ID }}"
+      AWS_ECR_PUSH_ROLE_ARN: "${{ vars.AWS_ECR_PUSH_ROLE_ARN }}"
+      ECR_REPOSITORY: "${{ vars.ECR_REPOSITORY }}"
+      ECR_REGISTRY: "${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com"
+      IMAGE_TAG: "${{ github.sha }}"
+      IMAGE_URI: "${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+
+    outputs:
+      image_reference: ${{ steps.image.outputs.reference }}
+      image_digest: ${{ steps.image.outputs.digest }}
+
+    steps:
+      - name: Validate publishing conditions and variables
+        run: |
+          set -euo pipefail
+
+          for REQUIRED_VARIABLE in \
+            AWS_REGION \
+            AWS_ACCOUNT_ID \
+            AWS_ECR_PUSH_ROLE_ARN \
+            ECR_REPOSITORY \
+            ECR_REGISTRY \
+            IMAGE_TAG \
+            IMAGE_URI
+          do
+            if [ -z "${!REQUIRED_VARIABLE:-}" ]; then
+              echo "::error::${REQUIRED_VARIABLE} is missing"
+              exit 1
+            fi
+          done
+
+          if ! [[ "${AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]; then
+            echo "::error::AWS_ACCOUNT_ID must contain exactly 12 digits"
+            exit 1
+          fi
+
+          if ! [[ "${IMAGE_TAG}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::IMAGE_TAG must be the full 40-character Git commit SHA"
+            exit 1
+          fi
+
+          EXPECTED_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/github-ecr-push-role"
+
+          if [ "${AWS_ECR_PUSH_ROLE_ARN}" != "${EXPECTED_ROLE_ARN}" ]; then
+            echo "::error::Unexpected ECR publisher role ARN"
+            exit 1
+          fi
+
+          echo "PASS: publishing is restricted to the expected AWS account and role"
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Configure temporary AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: "${{ vars.AWS_ACCOUNT_ID }}"
+          role-session-name: gha-ecr-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Verify assumed AWS identity
+        run: |
+          set -euo pipefail
+
+          CALLER_ARN="$(
+            aws sts get-caller-identity \
+              --query Arn \
+              --output text
+          )"
+
+          echo "Caller ARN: ${CALLER_ARN}"
+
+          case "${CALLER_ARN}" in
+            *":assumed-role/github-ecr-push-role/"*)
+              echo "PASS: expected ECR publisher role assumed"
+              ;;
+            *)
+              echo "::error::Unexpected AWS identity: ${CALLER_ARN}"
+              exit 1
+              ;;
+          esac
+
+      - name: Check for an existing immutable Git-SHA image
+        id: existing-image
+        run: |
+          set -euo pipefail
+
+          DIGEST="$(
+            aws ecr describe-images \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-ids "imageTag=${IMAGE_TAG}" \
+              --region "${AWS_REGION}" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text \
+              2>/dev/null || true
+          )"
+
+          if [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+            echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
+            echo "Immutable image already exists: ${DIGEST}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+            echo "digest=" >> "${GITHUB_OUTPUT}"
+            echo "No existing image found for ${IMAGE_TAG}"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.existing-image.outputs.exists != 'true'
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Login to Amazon ECR
+        if: steps.existing-image.outputs.exists != 'true'
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2.1.6
+
+      - name: Build and push immutable Git-SHA image
+        if: steps.existing-image.outputs.exists != 'true'
+        id: build-and-push
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          pull: true
+          tags: ${{ env.IMAGE_URI }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.sha }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=meeps-users-posts-api
+          cache-to: type=gha,mode=max,scope=meeps-users-posts-api
+
+      - name: Resolve and validate the ECR artifact
+        id: image
+        env:
+          BUILD_DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          ECR_DIGEST="$(
+            aws ecr describe-images \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-ids "imageTag=${IMAGE_TAG}" \
+              --region "${AWS_REGION}" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text
+          )"
+
+          MEDIA_TYPE="$(
+            aws ecr describe-images \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-ids "imageTag=${IMAGE_TAG}" \
+              --region "${AWS_REGION}" \
+              --query 'imageDetails[0].imageManifestMediaType' \
+              --output text
+          )"
+
+          if ! [[ "${ECR_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid ECR image digest: ${ECR_DIGEST}"
+            exit 1
+          fi
+
+          if [ -n "${BUILD_DIGEST:-}" ] &&
+             [ "${BUILD_DIGEST}" != "${ECR_DIGEST}" ]; then
+            echo "::error::Build digest does not match ECR digest"
+            echo "Buildx: ${BUILD_DIGEST}"
+            echo "ECR:    ${ECR_DIGEST}"
+            exit 1
+          fi
+
+          case "${MEDIA_TYPE}" in
+            application/vnd.oci.image.manifest.v1+json|\
+            application/vnd.docker.distribution.manifest.v2+json)
+              echo "PASS: scan-compatible image manifest: ${MEDIA_TYPE}"
+              ;;
+            *)
+              echo "::error::Unsupported ECR media type: ${MEDIA_TYPE}"
+              exit 1
+              ;;
+          esac
+
+          IMAGE_REFERENCE="${ECR_REGISTRY}/${ECR_REPOSITORY}@${ECR_DIGEST}"
+
+          echo "digest=${ECR_DIGEST}" >> "${GITHUB_OUTPUT}"
+          echo "media_type=${MEDIA_TYPE}" >> "${GITHUB_OUTPUT}"
+          echo "reference=${IMAGE_REFERENCE}" >> "${GITHUB_OUTPUT}"
+
+          echo "ECR digest: ${ECR_DIGEST}"
+          echo "ECR reference: ${IMAGE_REFERENCE}"
+
+      - name: Wait for ECR scan-on-push
+        id: scan
+        run: |
+          set -euo pipefail
+
+          STATUS="NOT_FOUND"
+
+          for ATTEMPT in $(seq 1 60); do
+            STATUS="$(
+              aws ecr describe-image-scan-findings \
+                --repository-name "${ECR_REPOSITORY}" \
+                --image-id "imageTag=${IMAGE_TAG}" \
+                --region "${AWS_REGION}" \
+                --query 'imageScanStatus.status' \
+                --output text \
+                2>/dev/null || true
+            )"
+
+            case "${STATUS}" in
+              COMPLETE)
+                echo "ECR scan completed"
+                break
+                ;;
+              FAILED|UNSUPPORTED_IMAGE)
+                echo "::error::ECR scan ended with status ${STATUS}"
+                exit 1
+                ;;
+              *)
+                echo "ECR scan status: ${STATUS:-NOT_FOUND} — attempt ${ATTEMPT}/60"
+                sleep 10
+                ;;
+            esac
+          done
+
+          if [ "${STATUS}" != "COMPLETE" ]; then
+            echo "::error::ECR scan did not complete within the allowed time"
+            exit 1
+          fi
+
+          SEVERITY_COUNTS="$(
+            aws ecr describe-image-scan-findings \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-id "imageTag=${IMAGE_TAG}" \
+              --region "${AWS_REGION}" \
+              --query 'imageScanFindings.findingSeverityCounts' \
+              --output json |
+            jq -c '.'
+          )"
+
+          echo "status=${STATUS}" >> "${GITHUB_OUTPUT}"
+          echo "counts=${SEVERITY_COUNTS}" >> "${GITHUB_OUTPUT}"
+
+          echo "Severity counts: ${SEVERITY_COUNTS}"
+
+      - name: Write ECR publication summary
+        run: |
+          {
+            echo "### Amazon ECR publication"
+            echo
+            echo "- Source commit: \`${IMAGE_TAG}\`"
+            echo "- ECR repository: \`${ECR_REPOSITORY}\`"
+            echo "- Image digest: \`${{ steps.image.outputs.digest }}\`"
+            echo "- Exact image reference: \`${{ steps.image.outputs.reference }}\`"
+            echo "- Media type: \`${{ steps.image.outputs.media_type }}\`"
+            echo "- Existing immutable tag reused: \`${{ steps.existing-image.outputs.exists }}\`"
+            echo "- ECR scan status: \`${{ steps.scan.outputs.status }}\`"
+            echo "- Severity counts: \`${{ steps.scan.outputs.counts }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
